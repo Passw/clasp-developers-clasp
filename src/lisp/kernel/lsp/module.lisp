@@ -26,8 +26,8 @@ It is used by PROVIDE and REQUIRE.")
 (defparameter ext:*module-provider-functions* nil
   "See function documentation for REQUIRE")
 
-(defvar *immutable-systems* (list (list :asdf) (list :uiop)
-                                  (list :asdf-package-system))
+(defvar *immutable-systems* (list (list "asdf") (list :uiop)
+                                  (list "asdf-package-system"))
   "The immutable systems that should immediately be registered when ASDF
 has been initially provided. Each element in this list should be a list
 in which the first element is the name of the system and following
@@ -44,9 +44,16 @@ Module-name is a string designator"
     (pushnew module-as-string *modules* :test #'string=)
     (when (and (find-package :asdf)
                (string= "ASDF" (string-upcase module-as-string)))
-      (let ((register-immutable-system (find-symbol "REGISTER-IMMUTABLE-SYSTEM" :asdf)))
+      (let* ((register-immutable-system (find-symbol "REGISTER-IMMUTABLE-SYSTEM" :asdf))
+            (register-preloaded-system (find-symbol "REGISTER-PRELOADED-SYSTEM" :asdf))
+             (mutable-systems-var (ext:getenv "CLASP_MUTABLE_SYSTEMS"))
+             (mutable-systems (when mutable-systems-var
+                                (core:split mutable-systems-var ","))))
         (dolist (args *immutable-systems*)
-          (apply register-immutable-system args)))))
+          (apply (if (member (first args) mutable-systems :test #'equal)
+                     register-preloaded-system
+                     register-immutable-system)
+                 args)))))
   t)
 
 (defparameter *requiring* nil)
