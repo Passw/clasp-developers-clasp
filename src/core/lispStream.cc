@@ -2560,11 +2560,11 @@ void IOStreamStream_O::fixupInternalsForSnapshotSaveLoad(snapshotSaveLoad::Fixup
     std::string name = gc::As<String_sp>(_Filename)->get_std_string();
     T_sp stream = this->asSmartPtr();
     if (name == "*STDIN*") {
-      _File = stdin;
+      _file = stdin;
     } else if (name == "*STDOUT*") {
-      _File = stdout;
+      _file = stdout;
     } else if (name == "*STDERR*") {
-      _File = stderr;
+      _file = stderr;
     }
   }
 }
@@ -2584,8 +2584,8 @@ cl_index IOStreamStream_O::read_byte8(unsigned char* c, cl_index n) {
   gctools::Fixnum out = 0;
   clasp_disable_interrupts();
   do {
-    out = fread(c, sizeof(char), n, _File);
-  } while (out < n && ferror(_File) && restartable_io_error("fread"));
+    out = fread(c, sizeof(char), n, _file);
+  } while (out < n && ferror(_file) && restartable_io_error("fread"));
   clasp_enable_interrupts();
 
   return out;
@@ -2603,7 +2603,7 @@ cl_index IOStreamStream_O::write_byte8(unsigned char* c, cl_index n) {
       if (!aux.nilp())
         stream_set_position(asSmartPtr(), aux);
     } else if (_LastOp > 0) {
-      clasp_fseeko(_File, 0, SEEK_CUR);
+      clasp_fseeko(_file, 0, SEEK_CUR);
     }
     _LastOp = -1;
   }
@@ -2611,7 +2611,7 @@ cl_index IOStreamStream_O::write_byte8(unsigned char* c, cl_index n) {
   cl_index out;
   clasp_disable_interrupts();
   do {
-    out = fwrite(c, sizeof(char), n, _File);
+    out = fwrite(c, sizeof(char), n, _file);
   } while (out < n && restartable_io_error("fwrite"));
   clasp_enable_interrupts();
   return out;
@@ -2627,7 +2627,7 @@ ListenResult IOStreamStream_O::listen() {
 void IOStreamStream_O::clear_input() {
   check_input();
 #if defined(CLASP_MS_WINDOWS_HOST)
-  int f = fileno(_File);
+  int f = fileno(_file);
   if (isatty(f)) {
     /* Flushes Win32 console */
     unlikely_if(!FlushConsoleInputBuffer((HANDLE)_get_osfhandle(f))) FEwin32_error("FlushConsoleInputBuffer() failed", 0);
@@ -2636,7 +2636,7 @@ void IOStreamStream_O::clear_input() {
 #endif
   while (_file_listen() == listen_result_available) {
     clasp_disable_interrupts();
-    getc(_File);
+    getc(_file);
     clasp_enable_interrupts();
   }
 }
@@ -2646,17 +2646,17 @@ void IOStreamStream_O::clear_output() { check_output(); }
 void IOStreamStream_O::force_output() {
   check_output();
   clasp_disable_interrupts();
-  while ((fflush(_File) == EOF) && restartable_io_error("fflush"))
+  while ((fflush(_file) == EOF) && restartable_io_error("fflush"))
     (void)0;
   clasp_enable_interrupts();
 }
 
 void IOStreamStream_O::finish_output() { force_output(); }
 
-bool IOStreamStream_O::interactive_p() const { return isatty(fileno(_File)); }
+bool IOStreamStream_O::interactive_p() const { return isatty(fileno(_file)); }
 
 T_sp IOStreamStream_O::length() {
-  T_sp output = clasp_file_len(fileno(_File)); // NIL or Integer_sp
+  T_sp output = clasp_file_len(fileno(_file)); // NIL or Integer_sp
   if (_ByteSize != 8 && output.notnilp()) {
     //            const cl_env_ptr the_env = clasp_process_env();
     T_mv output_mv = clasp_floor2(gc::As_unsafe<Integer_sp>(output), make_fixnum(_ByteSize / 8));
@@ -2675,7 +2675,7 @@ T_sp IOStreamStream_O::position() {
   clasp_off_t offset;
 
   clasp_disable_interrupts();
-  offset = clasp_ftello(_File);
+  offset = clasp_ftello(_file);
   clasp_enable_interrupts();
   if (offset < 0) {
     return make_fixnum(0);
@@ -2715,28 +2715,28 @@ T_sp IOStreamStream_O::set_position(T_sp pos) {
     mode = SEEK_SET;
   }
   clasp_disable_interrupts();
-  mode = clasp_fseeko(_File, disp, mode);
+  mode = clasp_fseeko(_file, disp, mode);
   clasp_enable_interrupts();
   return mode ? nil<T_O>() : _lisp->_true();
 }
 
-int IOStreamStream_O::input_handle() { return (_mode == stream_mode_input || _mode == stream_mode_io) ? fileno(_File) : -1; }
+int IOStreamStream_O::input_handle() { return (_mode == stream_mode_input || _mode == stream_mode_io) ? fileno(_file) : -1; }
 
-int IOStreamStream_O::output_handle() { return (_mode == stream_mode_output || _mode == stream_mode_io) ? fileno(_File) : -1; }
+int IOStreamStream_O::output_handle() { return (_mode == stream_mode_output || _mode == stream_mode_io) ? fileno(_file) : -1; }
 
 T_sp IOStreamStream_O::close(T_sp abort) {
   if (_Open) {
     int failed;
-    unlikely_if(_File == stdout) FEerror("Cannot close the standard output", 0);
-    unlikely_if(_File == stdin) FEerror("Cannot close the standard input", 0);
-    unlikely_if(_File == NULL) wrong_file_handler(asSmartPtr());
+    unlikely_if(_file == stdout) FEerror("Cannot close the standard output", 0);
+    unlikely_if(_file == stdin) FEerror("Cannot close the standard input", 0);
+    unlikely_if(_file == NULL) wrong_file_handler(asSmartPtr());
     if (output_p())
       force_output();
-    failed = safe_fclose(_File);
+    failed = safe_fclose(_file);
     unlikely_if(failed) cannot_close(asSmartPtr());
-    gctools::clasp_dealloc(_Buffer);
-    _Buffer = NULL;
-    _File = NULL;
+    gctools::clasp_dealloc(_buffer);
+    _buffer = NULL;
+    _file = NULL;
     close_cleanup(abort);
     _Open = false;
   }
@@ -2754,7 +2754,7 @@ T_sp IOStreamStream_O::make(T_sp fname, FILE* f, StreamMode smm, gctools::Fixnum
   stream->_Flags = flags;
   stream->set_external_format(external_format);
   stream->_Filename = fname;
-  stream->_File = f;
+  stream->_file = f;
   return stream;
 }
 
@@ -2945,31 +2945,25 @@ CL_LAMBDA(stream mode);
 CL_DECLARE();
 CL_DOCSTRING(R"dx(set-buffering-mode)dx");
 DOCGROUP(clasp);
-CL_DEFUN
-T_sp core__set_buffering_mode(T_sp stream, T_sp buffer_mode_symbol) {
-  IOStreamStream_sp strm = stream.asOrNull<IOStreamStream_sp>();
-  if (strm) {
-    int buffer_mode;
+CL_LISPIFY_NAME("set_buffering_mode")
+CL_DEFMETHOD
+void IOStreamStream_O::set_buffering_mode(T_sp mode) {
+  int bm;
 
-    if (buffer_mode_symbol == kw::_sym_none || buffer_mode_symbol.nilp())
-      buffer_mode = _IONBF;
-    else if (buffer_mode_symbol == kw::_sym_line || buffer_mode_symbol == kw::_sym_line_buffered)
-      buffer_mode = _IOLBF;
-    else if (buffer_mode_symbol == kw::_sym_full || buffer_mode_symbol == kw::_sym_fully_buffered)
-      buffer_mode = _IOFBF;
-    else
-      FEerror("Not a valid buffering mode: ~A", 1, buffer_mode_symbol.raw_());
+  if (mode == kw::_sym_none || mode.nilp())
+    bm = _IONBF;
+  else if (mode == kw::_sym_line || mode == kw::_sym_line_buffered)
+    bm = _IOLBF;
+  else if (mode == kw::_sym_full || mode == kw::_sym_fully_buffered)
+    bm = _IOFBF;
+  else
+    FEerror("Not a valid buffering mode: ~A", 1, mode.raw_());
 
-    if (buffer_mode != _IONBF) {
-      cl_index buffer_size = BUFSIZ;
-      char* new_buffer = gctools::clasp_alloc_atomic(buffer_size);
-      strm->_Buffer = new_buffer;
-      setvbuf(strm->_File, new_buffer, buffer_mode, buffer_size);
-    } else
-      setvbuf(strm->_File, NULL, _IONBF, 0);
-  }
-
-  return stream;
+  if (bm != _IONBF) {
+    _buffer = gctools::clasp_alloc_atomic(BUFSIZ);
+    setvbuf(_file, _buffer, bm, BUFSIZ);
+  } else
+    setvbuf(_file, NULL, _IONBF, 0);
 }
 
 T_sp IOStreamStream_O::make(T_sp fname, int fd, StreamMode smm, gctools::Fixnum byte_size, int flags, T_sp external_format,
@@ -3028,9 +3022,9 @@ CL_DEFUN T_sp ext__make_stream_from_fd(int fd, T_sp direction, T_sp buffering, T
   }
   gctools::Fixnum byte_size;
   byte_size = clasp_normalize_stream_element_type(element_type);
-  T_sp stream = IOStreamStream_O::make(name, fd, smm_mode, byte_size, CLASP_STREAM_BINARY, external_format);
+  IOStreamStream_sp stream = IOStreamStream_O::make(name, fd, smm_mode, byte_size, CLASP_STREAM_BINARY, external_format);
   if (buffering.notnilp()) {
-    core__set_buffering_mode(stream, byte_size ? kw::_sym_full : kw::_sym_line);
+    stream->set_buffering_mode(byte_size ? kw::_sym_full : kw::_sym_line);
   }
   return stream;
 }
@@ -3465,7 +3459,7 @@ T_sp clasp_open_stream(T_sp fn, StreamMode smm, T_sp if_exists, T_sp if_does_not
       UNREACHABLE();
     }
     output = IOStreamStream_O::make(fn, fp, smm, byte_size, flags, external_format, temp_name, created);
-    core__set_buffering_mode(output, byte_size ? kw::_sym_full : kw::_sym_line);
+    gc::As<IOStreamStream_sp>(output)->set_buffering_mode(byte_size ? kw::_sym_full : kw::_sym_line);
   } else {
     output = IOFileStream_O::make(fn, f, smm, byte_size, flags, external_format, temp_name, created);
   }
@@ -3688,28 +3682,28 @@ listen_error:
 
 ListenResult IOStreamStream_O::_file_listen() {
   ListenResult aux;
-  if (feof(_File))
+  if (feof(_file))
     return listen_result_eof;
 #ifdef FILE_CNT
-  if (FILE_CNT(_File) > 0)
+  if (FILE_CNT(_file) > 0)
     return listen_result_available;
 #endif
-  aux = _fd_listen(fileno(_File));
+  aux = _fd_listen(fileno(_file));
   if (aux != listen_result_unknown)
     return aux;
   /* This code is portable, and implements the expected behavior for regular files.
             It will fail on noninteractive streams. */
   {
     /* regular file */
-    clasp_off_t old_pos = clasp_ftello(_File), end_pos;
+    clasp_off_t old_pos = clasp_ftello(_file), end_pos;
     unlikely_if(old_pos < 0) {
       file_libc_error(core::_sym_simpleFileError, asSmartPtr(), "Unable to check file position in SEEK_END", 0);
     }
-    unlikely_if(clasp_fseeko(_File, 0, SEEK_END) != 0) {
+    unlikely_if(clasp_fseeko(_file, 0, SEEK_END) != 0) {
       file_libc_error(core::_sym_simpleFileError, asSmartPtr(), "Unable to check file position in SEEK_END", 0);
     }
-    end_pos = clasp_ftello(_File);
-    unlikely_if(clasp_fseeko(_File, old_pos, SEEK_SET) != 0)
+    end_pos = clasp_ftello(_file);
+    unlikely_if(clasp_fseeko(_file, old_pos, SEEK_SET) != 0)
         file_libc_error(core::_sym_simpleFileError, asSmartPtr(), "Unable to check file position in SEEK_SET", 0);
     return (end_pos > old_pos ? listen_result_available : listen_result_eof);
   }
@@ -3790,8 +3784,8 @@ void unread_twice(T_sp s) { CEerror(_lisp->_true(), "Used UNREAD-CHAR twice on s
 
 void maybe_clearerr(T_sp strm) {
   IOStreamStream_sp s = strm.asOrNull<IOStreamStream_O>();
-  if (s && s->_File)
-    clearerr(s->_File);
+  if (s && s->_file)
+    clearerr(s->_file);
 }
 
 int restartable_io_error(T_sp strm, const char* s) {
@@ -3948,11 +3942,7 @@ FileScope_sp clasp_input_source_file_info(T_sp strm) { return gc::As<FileScope_s
 
 namespace core {
 
-AnsiStream_O::~AnsiStream_O() {
-  close(nil<T_O>());
-  gctools::clasp_dealloc(this->_Buffer);
-  this->_Buffer = NULL;
-};
+AnsiStream_O::~AnsiStream_O() { close(nil<T_O>()); };
 
 cl_index AnsiStream_O::consume_byte_stack(unsigned char* c, cl_index n) {
   cl_index out = 0;

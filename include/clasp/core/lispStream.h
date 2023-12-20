@@ -267,7 +267,6 @@ class AnsiStream_O : public Stream_O {
 
 public:
   bool _Open;
-  char* _Buffer;
   T_sp _Format;
   int _ByteSize;
   int _Flags;         // bitmap of flags
@@ -283,8 +282,8 @@ public:
 
 public:
   AnsiStream_O()
-      : _Open(true), _Buffer(NULL), _Format(nil<Symbol_O>()), _ByteSize(8), _Flags(0), _ByteStack(nil<T_O>()),
-        _FormatTable(nil<T_O>()), _LastCode{EOF, EOF}, _EofChar(EOF), _ExternalFormat(nil<T_O>()), _OutputColumn(0){};
+      : _Open(true), _Format(nil<Symbol_O>()), _ByteSize(8), _Flags(0), _ByteStack(nil<T_O>()), _FormatTable(nil<T_O>()),
+        _LastCode{EOF, EOF}, _EofChar(EOF), _ExternalFormat(nil<T_O>()), _OutputColumn(0){};
   virtual ~AnsiStream_O(); // nontrivial
 
   cl_index consume_byte_stack(unsigned char* c, cl_index n);
@@ -553,10 +552,11 @@ class IOStreamStream_O : public FileStream_O {
   LISP_CLASS(core, CorePkg, IOStreamStream_O, "iostream-stream", FileStream_O);
 
 public:
-  FILE* _File;
+  FILE* _file;
+  char* _buffer;
 
 public:
-  IOStreamStream_O(){};
+  IOStreamStream_O() : _buffer(NULL){};
 
   void fixupInternalsForSnapshotSaveLoad(snapshotSaveLoad::Fixup* fixup);
 
@@ -566,7 +566,7 @@ public:
   static T_sp make(T_sp fname, int fd, StreamMode smm, gctools::Fixnum byte_size = 8, int flags = CLASP_STREAM_DEFAULT_FORMAT,
                    T_sp external_format = nil<T_O>(), T_sp tempName = nil<T_O>(), bool created = false);
 
-  FILE* file() const { return this->_File; };
+  FILE* file() const { return this->_file; };
 
   cl_index read_byte8(unsigned char* c, cl_index n);
   cl_index write_byte8(unsigned char* c, cl_index n);
@@ -589,6 +589,8 @@ public:
   int output_handle();
 
   T_sp close(T_sp abort);
+
+  void set_buffering_mode(T_sp mode);
 };
 
 class StringStream_O : public AnsiStream_O {
