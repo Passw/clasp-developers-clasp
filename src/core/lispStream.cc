@@ -395,7 +395,7 @@ claspCharacter stream_write_char(T_sp stream, claspCharacter c) {
 // argument is guaranteed to be an AnsiStream_sp so recursion is
 // avoided.
 CL_LISPIFY_NAME("gray:%stream-advance-to-column")
-CL_DEFUN bool stream_advance_to_column(T_sp stream, int column) {
+CL_DEFUN bool stream_advance_to_column(T_sp stream, uint column) {
   return stream.isA<AnsiStream_O>()
              ? stream.as_unsafe<AnsiStream_O>()->advance_to_column(column)
              : T_sp(eval::funcall(gray::_sym_stream_advance_to_column, stream, clasp_make_fixnum(column))).notnilp();
@@ -546,16 +546,15 @@ T_sp stream_string_length(T_sp stream, T_sp string) {
 
 // Stream column and line functions
 
-int stream_column(T_sp stream) {
+uint stream_column(T_sp stream) {
   if (stream.isA<AnsiStream_O>())
     return stream.as_unsafe<AnsiStream_O>()->column();
 
-  T_sp col = eval::funcall(gray::_sym_stream_line_column, stream);
-  // negative columns represent NIL
-  return col.nilp() ? -1 : clasp_to_integral<int>(clasp_floor1(gc::As<Real_sp>(col)));
+  T_sp column = eval::funcall(gray::_sym_stream_line_column, stream);
+  return column.nilp() ? UINT_MAX : clasp_to_integral<uint>(clasp_floor1(gc::As<Real_sp>(column)));
 }
 
-int stream_set_column(T_sp stream, int column) {
+uint stream_set_column(T_sp stream, uint column) {
   return stream.isA<AnsiStream_O>() ? stream.as_unsafe<AnsiStream_O>()->set_column(column) : column;
 }
 
@@ -569,13 +568,38 @@ CL_DEFUN bool stream_start_line_p(T_sp stream) {
                                     : T_sp(eval::funcall(gray::_sym_stream_line_column, stream)).notnilp();
 }
 
-int stream_line(T_sp stream) {
+uint stream_line(T_sp stream) {
   if (stream.isA<AnsiStream_O>())
     return stream.as_unsafe<AnsiStream_O>()->column();
 
   T_sp line = eval::funcall(gray::_sym_stream_line_number, stream);
-  // negative lines represent NIL
-  return line.nilp() ? -1 : clasp_to_integral<int>(clasp_floor1(gc::As<Real_sp>(line)));
+  return line.nilp() ? UINT_MAX : clasp_to_integral<uint>(clasp_floor1(gc::As<Real_sp>(line)));
+}
+
+// Stream input tracking functions
+
+// This function is exposed to CL because it is needed to implement
+// the GRAY:STREAM-INPUT-COLUMN for ansi-stream. The stream argument
+// is guaranteed to be an AnsiStream_sp so recursion is avoided.
+CL_LISPIFY_NAME("gray:%stream-input-column")
+CL_DEFUN uint stream_input_column(T_sp stream) {
+  if (stream.isA<AnsiStream_O>())
+    return stream.as_unsafe<AnsiStream_O>()->input_column();
+
+  T_sp column = eval::funcall(gray::_sym_stream_input_column, stream);
+  return column.nilp() ? UINT_MAX : clasp_to_integral<uint>(clasp_floor1(gc::As<Real_sp>(column)));
+}
+
+// This function is exposed to CL because it is needed to implement
+// the GRAY:STREAM-INPUT-LINE for ansi-stream. The stream argument is
+// guaranteed to be an AnsiStream_sp so recursion is avoided.
+CL_LISPIFY_NAME("gray:%stream-input-line")
+CL_DEFUN uint stream_input_line(T_sp stream) {
+  if (stream.isA<AnsiStream_O>())
+    return stream.as_unsafe<AnsiStream_O>()->input_line();
+
+  T_sp line = eval::funcall(gray::_sym_stream_input_line, stream);
+  return line.nilp() ? UINT_MAX : clasp_to_integral<uint>(clasp_floor1(gc::As<Real_sp>(line)));
 }
 
 // Stream pathname functions
@@ -1637,11 +1661,11 @@ void wsock_error(const char* err_msg, T_sp strm) {
 
 CL_LAMBDA(stream);
 CL_DOCSTRING(R"dx(streamLinenumber)dx");
-CL_DEFUN int core__stream_linenumber(T_sp tstream) { return clasp_input_lineno(tstream); };
+CL_DEFUN int core__stream_linenumber(T_sp tstream) { return stream_input_line(tstream); };
 
 CL_LAMBDA(stream);
 CL_DOCSTRING(R"dx(streamColumn)dx");
-CL_DEFUN int core__stream_column(T_sp tstream) { return clasp_input_column(tstream); };
+CL_DEFUN int core__stream_column(T_sp tstream) { return stream_input_column(tstream); };
 
 void clasp_write_characters(const char* buf, int sz, T_sp strm) {
   for (int i(0); i < sz; ++i) {
@@ -1686,25 +1710,15 @@ size_t clasp_input_filePos(T_sp strm) {
   return 0;
 }
 
-int clasp_input_lineno(T_sp stream) {
-  AnsiStream_sp ansi_stream = stream.asOrNull<AnsiStream_O>();
-  return ansi_stream ? ansi_stream->_input_cursor._line_number : 0;
-}
-
-int clasp_input_column(T_sp stream) {
-  AnsiStream_sp ansi_stream = stream.asOrNull<AnsiStream_O>();
-  return ansi_stream ? ansi_stream->_input_cursor._column : 0;
-}
-
 CL_LAMBDA(stream file line-offset positional-offset);
 CL_DOCSTRING(R"dx(sourcePosInfo)dx");
 CL_DEFUN SourcePosInfo_sp core__input_stream_source_pos_info(T_sp strm, FileScope_sp sfi, size_t line_offset, size_t pos_offset) {
   strm = coerce::inputStreamDesignator(strm);
-  size_t filePos = clasp_input_filePos(strm) + pos_offset;
-  uint lineno, column;
-  lineno = clasp_input_lineno(strm) + line_offset;
-  column = clasp_input_column(strm);
-  SourcePosInfo_sp spi = SourcePosInfo_O::create(sfi->fileHandle(), filePos, lineno, column);
+  uint line = stream_input_line(strm), column = stream_input_column(strm);
+  // UINT_MAX indicated unknown, so we just default to column zero and
+  // line one as needed.
+  SourcePosInfo_sp spi = SourcePosInfo_O::create(sfi->fileHandle(), clasp_input_filePos(strm) + pos_offset,
+                                                 ((line == UINT_MAX) ? 1 : line) + line_offset, (column == UINT_MAX) ? 0 : column);
   return spi;
 }
 
@@ -1712,11 +1726,11 @@ CL_DEFUN SourcePosInfo_sp core__input_stream_source_pos_info(T_sp strm, FileScop
 SourcePosInfo_sp clasp_simple_input_stream_source_pos_info(T_sp strm) {
   strm = coerce::inputStreamDesignator(strm);
   FileScope_sp sfi = clasp_input_source_file_info(strm);
-  size_t filePos = clasp_input_filePos(strm);
-  uint lineno, column;
-  lineno = clasp_input_lineno(strm);
-  column = clasp_input_column(strm);
-  SourcePosInfo_sp spi = SourcePosInfo_O::create(sfi->fileHandle(), filePos, lineno, column);
+  uint line = stream_input_line(strm), column = stream_input_column(strm);
+  // UINT_MAX indicated unknown, so we just default to column zero and
+  // line one as needed.
+  SourcePosInfo_sp spi = SourcePosInfo_O::create(sfi->fileHandle(), clasp_input_filePos(strm), (line == UINT_MAX) ? 1 : line,
+                                                 (column == UINT_MAX) ? 0 : column);
   return spi;
 }
 
@@ -1724,55 +1738,26 @@ FileScope_sp clasp_input_source_file_info(T_sp strm) { return gc::As<FileScope_s
 
 void lisp_write(const std::string& s) { clasp_write_string(s); }
 
-void StreamCursor::advanceLineNumber(T_sp strm, claspCharacter c, int num) {
-  this->_prev_line_number = this->_line_number;
-  this->_prev_column = this->_column;
-  this->_line_number += num;
-  this->_column = 0;
-#ifdef DEBUG_CURSOR
-  if (core::_sym_STARdebugMonitorSTAR->symbolValue().notnilp()) {
-    printf("%s:%d stream=%s advanceLineNumber=%c/%d  ln/col=%lld/%d\n", __FILE__, __LINE__, stream_pathname(strm)->get().c_str(), c,
-           c, this->_line_number, this->_column);
-  }
-#endif
-}
+claspCharacter StreamCursor::update(claspCharacter c) {
+  if (c != EOF) {
+    save();
 
-void StreamCursor::advanceColumn(T_sp strm, claspCharacter c, int num) {
-  this->_prev_line_number = this->_line_number;
-  this->_prev_column = this->_column;
-  this->_column++;
-#ifdef DEBUG_CURSOR
-  if (core::_sym_STARdebugMonitorSTAR->symbolValue().notnilp()) {
-    printf("%s:%d stream=%s advanceColumn=%c/%d  ln/col=%lld/%d\n", __FILE__, __LINE__, stream_pathname(strm)->get().c_str(), c, c,
-           this->_line_number, this->_column);
+    if (c == CLASP_CHAR_CODE_NEWLINE) {
+      column() = 0;
+      line()++;
+    } else if (c == '\t')
+      column() = (column() & ~((size_t)07)) + 8;
+    else
+      column()++;
   }
-#endif
-}
 
-void StreamCursor::backup(T_sp strm, claspCharacter c) {
-  this->_line_number = this->_prev_line_number;
-  this->_column = this->_prev_column;
-#ifdef DEBUG_CURSOR
-  if (core::_sym_STARdebugMonitorSTAR->symbolValue().notnilp()) {
-    printf("%s:%d stream=%s backup=%c/%d ln/col=%lld/%d\n", __FILE__, __LINE__, stream_pathname(strm)->get().c_str(), c, c,
-           this->_line_number, this->_column);
-  }
-#endif
+  return c;
 }
 
 // AnsiStream_O
 
 AnsiStream_O::~AnsiStream_O() { close(nil<T_O>()); };
 
-void AnsiStream_O::update_line_column(claspCharacter c) {
-  if (c == CLASP_CHAR_CODE_NEWLINE) {
-    _column = 0;
-    _line++;
-  } else if (c == '\t')
-    _column = (_column & ~((size_t)07)) + 8;
-  else
-    _column++;
-}
 int AnsiStream_O::restartable_io_error(const char* s) {
   cl_env_ptr the_env = clasp_process_env();
   volatile int old_errno = errno;
@@ -1896,11 +1881,13 @@ claspCharacter AnsiStream_O::write_char(claspCharacter c) {
   return EOF;
 }
 
-bool AnsiStream_O::advance_to_column(int column) {
-  while (_column < column) {
+bool AnsiStream_O::advance_to_column(uint col) {
+  if (column() == UINT_MAX)
+    return false;
+
+  while (column() < col)
     write_char(' ');
-    _column++;
-  }
+
   return true;
 }
 
@@ -2053,11 +2040,17 @@ T_sp AnsiStream_O::string_length(T_sp string) {
   return nil<T_O>();
 }
 
-int AnsiStream_O::column() const { return _column; }
+uint AnsiStream_O::column() const { return _output_cursor.column(); }
 
-int AnsiStream_O::set_column(int column) { return _column = column; }
+uint AnsiStream_O::set_column(uint column) { return _output_cursor.column() = column; }
 
-bool AnsiStream_O::start_line_p() const { return _column < 1; }
+bool AnsiStream_O::start_line_p() const { return _output_cursor.start_line_p(); }
+
+uint AnsiStream_O::line() const { return _output_cursor.line(); };
+
+uint AnsiStream_O::input_column() const { return _input_cursor.column(); }
+
+uint AnsiStream_O::input_line() const { return _input_cursor.line(); }
 
 T_sp AnsiStream_O::pathname() const {
   // not_a_file_stream(asSmartPtr());
@@ -2068,8 +2061,6 @@ T_sp AnsiStream_O::truename() const {
   // not_a_file_stream(asSmartPtr());
   return nil<T_O>();
 }
-
-int AnsiStream_O::line() const { return _line; };
 
 int AnsiStream_O::file_descriptor(StreamDirection direction) const { return -1; }
 
@@ -2171,9 +2162,9 @@ T_sp BroadcastStream_O::string_length(T_sp string) {
   return _streams.nilp() ? (T_sp)clasp_make_fixnum(1) : stream_string_length(last_stream(), string);
 }
 
-int BroadcastStream_O::column() const { return _streams.nilp() ? -1 : stream_column(last_stream()); }
+uint BroadcastStream_O::column() const { return _streams.nilp() ? -1 : stream_column(last_stream()); }
 
-int BroadcastStream_O::set_column(int column) {
+uint BroadcastStream_O::set_column(uint column) {
   int result = column;
   for (T_sp l = _streams; !l.nilp(); l = oCdr(l)) {
     result = stream_set_column(oCar(l), column);
@@ -2183,7 +2174,7 @@ int BroadcastStream_O::set_column(int column) {
 
 bool BroadcastStream_O::start_line_p() const { return _streams.nilp() || stream_start_line_p(last_stream()); }
 
-bool BroadcastStream_O::advance_to_column(int column) {
+bool BroadcastStream_O::advance_to_column(uint column) {
   bool result = true;
   for (T_sp l = _streams; !l.nilp(); l = oCdr(l)) {
     result = stream_advance_to_column(oCar(l), column);
@@ -2286,6 +2277,9 @@ claspCharacter ConcatenatedStream_O::read_char() {
       break;
     _streams = l = oCdr(l);
   }
+
+  _input_cursor.update(c);
+
   return c;
 }
 
@@ -2293,6 +2287,7 @@ void ConcatenatedStream_O::unread_char(claspCharacter c) {
   check_open();
 
   unlikely_if(_streams.nilp()) unread_error(asSmartPtr());
+  _input_cursor.restore();
   stream_unread_char(oCar(_streams), c);
 }
 
@@ -2322,6 +2317,10 @@ bool ConcatenatedStream_O::input_p() const { return true; }
 // should be concatenated_element_type with a proper definition for that
 // ccl does more or less (stream-element-type (concatenated-stream-current-input-stream s))
 T_sp ConcatenatedStream_O::element_type() const { return _streams.nilp() ? _lisp->_true() : stream_element_type(oCar(_streams)); }
+
+uint ConcatenatedStream_O::input_column() const { return _streams.nilp() ? 0 : stream_input_column(oCar(_streams)); }
+
+uint ConcatenatedStream_O::input_line() const { return _streams.nilp() ? 0 : stream_input_line(oCar(_streams)); }
 
 T_sp ConcatenatedStream_O::position() { return nil<T_O>(); }
 
@@ -2426,7 +2425,7 @@ void EchoStream_O::clear_input() { stream_clear_input(_input_stream); }
 
 claspCharacter EchoStream_O::write_char(claspCharacter c) { return stream_write_char(_output_stream, c); }
 
-bool EchoStream_O::advance_to_column(int column) { return stream_advance_to_column(_output_stream, column); }
+bool EchoStream_O::advance_to_column(uint column) { return stream_advance_to_column(_output_stream, column); }
 
 void EchoStream_O::clear_output() { stream_clear_output(_output_stream); }
 
@@ -2442,11 +2441,15 @@ T_sp EchoStream_O::element_type() const { return stream_element_type(_input_stre
 
 T_sp EchoStream_O::position() { return nil<T_O>(); }
 
-int EchoStream_O::column() const { return stream_column(_output_stream); }
+uint EchoStream_O::column() const { return stream_column(_output_stream); }
 
-int EchoStream_O::set_column(int column) { return stream_set_column(_output_stream, column); }
+uint EchoStream_O::set_column(uint column) { return stream_set_column(_output_stream, column); }
 
 bool EchoStream_O::start_line_p() const { return stream_start_line_p(_output_stream); }
+
+uint EchoStream_O::input_column() const { return stream_input_column(_input_stream); }
+
+uint EchoStream_O::input_line() const { return stream_input_line(_input_stream); }
 
 int EchoStream_O::file_descriptor(StreamDirection direction) const {
   switch (direction) {
@@ -2511,11 +2514,13 @@ string StringInputStream_O::peer(size_t len) {
 }
 
 claspCharacter StringInputStream_O::read_char() {
-  return (_input_position >= _input_limit) ? EOF : clasp_as_claspCharacter(cl__char(_contents, _input_position++));
+  return (_input_position >= _input_limit) ? EOF
+                                           : _input_cursor.update(clasp_as_claspCharacter(cl__char(_contents, _input_position++)));
 }
 
 void StringInputStream_O::unread_char(claspCharacter c) {
   unlikely_if(c <= 0) unread_error(asSmartPtr());
+  _input_cursor.restore();
   _input_position--;
 }
 
@@ -2532,7 +2537,7 @@ T_mv StringInputStream_O::read_line() {
   cl_index start = _input_position, end = _input_position;
 
   for (; _input_position < _input_limit; end++, _input_position++) {
-    if (cl__char(_contents, end).unsafe_character() == CLASP_CHAR_CODE_NEWLINE) {
+    if (_input_cursor.update(cl__char(_contents, end).unsafe_character()) == CLASP_CHAR_CODE_NEWLINE) {
       _input_position++;
       missing_newline_p = nil<T_O>();
       break;
@@ -2576,17 +2581,13 @@ CL_DEFUN StringOutputStream_sp core__make_string_output_stream_from_string(T_sp 
     FEerror("~S is not a string with a fill-pointer.", 1, s.raw_());
   }
   strm->_contents = gc::As<String_sp>(s);
-  strm->_column = 0;
   return strm;
 }
 
 void StringOutputStream_O::fill(const string& data) { StringPushStringCharStar(this->_contents, data.c_str()); }
 
 /*! Get the contents and reset them */
-void StringOutputStream_O::clear() {
-  _contents->fillPointerSet(0);
-  _column = 0;
-};
+void StringOutputStream_O::clear() { _contents->fillPointerSet(0); };
 
 /*! Get the contents and reset them */
 String_sp StringOutputStream_O::get_string() {
@@ -2596,7 +2597,7 @@ String_sp StringOutputStream_O::get_string() {
 };
 
 claspCharacter StringOutputStream_O::write_char(claspCharacter c) {
-  update_line_column(c);
+  _output_cursor.update(c);
   _contents->vectorPushExtend(clasp_make_character(c));
   return c;
 }
@@ -2702,7 +2703,6 @@ CL_DEFUN String_sp core__get_thread_local_write_to_string_output_stream_string(S
   } else {
     my_stream->_contents->fillPointerSet(0);
   }
-  my_stream->_column = 0;
   return result;
 }
 
@@ -2759,7 +2759,7 @@ void SynonymStream_O::clear_input() { stream_clear_input(stream()); }
 
 claspCharacter SynonymStream_O::write_char(claspCharacter c) { return stream_write_char(stream(), c); }
 
-bool SynonymStream_O::advance_to_column(int column) { return stream_advance_to_column(stream(), column); }
+bool SynonymStream_O::advance_to_column(uint column) { return stream_advance_to_column(stream(), column); }
 
 void SynonymStream_O::clear_output() { stream_clear_output(stream()); }
 
@@ -2791,11 +2791,15 @@ T_sp SynonymStream_O::position() { return stream_position(stream()); }
 
 T_sp SynonymStream_O::set_position(T_sp pos) { return stream_set_position(stream(), pos); }
 
-int SynonymStream_O::column() const { return stream_column(stream()); }
+uint SynonymStream_O::column() const { return stream_column(stream()); }
 
-int SynonymStream_O::set_column(int column) { return stream_set_column(stream(), column); }
+uint SynonymStream_O::set_column(uint column) { return stream_set_column(stream(), column); }
 
 bool SynonymStream_O::start_line_p() const { return stream_start_line_p(stream()); }
+
+uint SynonymStream_O::input_column() const { return stream_input_column(stream()); }
+
+uint SynonymStream_O::input_line() const { return stream_input_line(stream()); }
 
 T_sp SynonymStream_O::pathname() const { return stream_pathname(stream()); };
 
@@ -2886,7 +2890,7 @@ void TwoWayStream_O::clear_input() { stream_clear_input(_input_stream); }
 
 claspCharacter TwoWayStream_O::write_char(claspCharacter c) { return stream_write_char(_output_stream, c); }
 
-bool TwoWayStream_O::advance_to_column(int column) { return stream_advance_to_column(_output_stream, column); }
+bool TwoWayStream_O::advance_to_column(uint column) { return stream_advance_to_column(_output_stream, column); }
 
 void TwoWayStream_O::clear_output() { stream_clear_output(_output_stream); }
 
@@ -2912,11 +2916,15 @@ T_sp TwoWayStream_O::element_type() const { return stream_element_type(_input_st
 
 T_sp TwoWayStream_O::position() { return nil<T_O>(); }
 
-int TwoWayStream_O::column() const { return stream_column(_output_stream); }
+uint TwoWayStream_O::column() const { return stream_column(_output_stream); }
 
-int TwoWayStream_O::set_column(int column) { return stream_set_column(_output_stream, column); }
+uint TwoWayStream_O::set_column(uint column) { return stream_set_column(_output_stream, column); }
 
 bool TwoWayStream_O::start_line_p() const { return stream_start_line_p(_output_stream); }
+
+uint TwoWayStream_O::input_column() const { return stream_input_column(_input_stream); }
+
+uint TwoWayStream_O::input_line() const { return stream_input_line(_input_stream); }
 
 int TwoWayStream_O::file_descriptor(StreamDirection direction) const {
   switch (direction) {
@@ -3346,7 +3354,7 @@ void FileStream_O::unread_char(claspCharacter c) {
   }
   _byte_stack = gc::As<Cons_sp>(l);
   _last_char = EOF;
-  _input_cursor.backup(asSmartPtr(), c);
+  _input_cursor.restore();
 }
 
 claspCharacter FileStream_O::read_char_no_cursor() {
@@ -3374,39 +3382,36 @@ claspCharacter FileStream_O::read_char_no_cursor() {
 
 claspCharacter FileStream_O::read_char() {
   claspCharacter c = read_char_no_cursor();
-  switch (_flags & CLASP_STREAM_CRLF) {
-  case CLASP_STREAM_CRLF:
-    if (c == CLASP_CHAR_CODE_RETURN) {
-      c = read_char_no_cursor();
-      if (c == CLASP_CHAR_CODE_LINEFEED) {
-        _last_code[0] = CLASP_CHAR_CODE_RETURN;
-        _last_code[1] = c;
-        c = CLASP_CHAR_CODE_NEWLINE;
-      } else {
-        unread_char(c);
-        c = CLASP_CHAR_CODE_RETURN;
-        _last_code[0] = c;
-        _last_code[1] = EOF;
+
+  if (c != EOF) {
+    switch (_flags & CLASP_STREAM_CRLF) {
+    case CLASP_STREAM_CRLF:
+      if (c == CLASP_CHAR_CODE_RETURN) {
+        c = read_char_no_cursor();
+        if (c == CLASP_CHAR_CODE_LINEFEED) {
+          _last_code[0] = CLASP_CHAR_CODE_RETURN;
+          _last_code[1] = c;
+          c = CLASP_CHAR_CODE_NEWLINE;
+        } else {
+          unread_char(c);
+          c = CLASP_CHAR_CODE_RETURN;
+          _last_code[0] = c;
+          _last_code[1] = EOF;
+        }
+        _last_char = c;
       }
-      _last_char = c;
-      _input_cursor.advanceLineNumber(asSmartPtr(), c);
-    } else {
-      _input_cursor.advanceColumn(asSmartPtr(), c);
+      break;
+    case CLASP_STREAM_CR:
+      if (c == CLASP_CHAR_CODE_RETURN) {
+        c = CLASP_CHAR_CODE_NEWLINE;
+        _last_char = c;
+      }
+      break;
     }
-    break;
-  case CLASP_STREAM_CR:
-    if (c == CLASP_CHAR_CODE_RETURN) {
-      c = CLASP_CHAR_CODE_NEWLINE;
-      _last_char = c;
-      _input_cursor.advanceLineNumber(asSmartPtr(), c);
-    } else {
-      _input_cursor.advanceColumn(asSmartPtr(), c);
-    }
-    break;
-  default:
-    _input_cursor.advanceForChar(asSmartPtr(), c, _last_char);
-    break;
+
+    _input_cursor.update(c);
   }
+
   return c;
 }
 
@@ -3429,7 +3434,7 @@ claspCharacter FileStream_O::write_char(claspCharacter c) {
     write_byte8(buffer, nbytes);
   }
 
-  update_line_column(c);
+  _output_cursor.update(c);
 
   return c;
 }
@@ -4247,7 +4252,7 @@ void FileStream_O::write_sequence(T_sp data, cl_index start, cl_index end) {
             c = CLASP_CHAR_CODE_RETURN;
         }
         nbytes += encode(buffer + nbytes, c);
-        update_line_column(c);
+        _output_cursor.update(c);
         if (nbytes >= VECTOR_ENCODING_BUFFER_SIZE) {
           write_byte8(buffer, nbytes);
           nbytes = 0;
@@ -4271,7 +4276,7 @@ void FileStream_O::write_sequence(T_sp data, cl_index start, cl_index end) {
             c = CLASP_CHAR_CODE_RETURN;
         }
         nbytes += encode(buffer + nbytes, c);
-        update_line_column(c);
+        _output_cursor.update(c);
         if (nbytes >= VECTOR_ENCODING_BUFFER_SIZE) {
           write_byte8(buffer, nbytes);
           nbytes = 0;
@@ -4520,7 +4525,6 @@ PosixFileStream_sp PosixFileStream_O::make(T_sp fname, int fd, StreamDirection d
   stream->_flags = flags;
   stream->set_external_format(external_format);
   stream->_filename = fname;
-  stream->_column = 0;
   stream->_file_descriptor = fd;
   stream->_last_op = 0;
   return stream;
